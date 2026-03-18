@@ -23,6 +23,14 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          VITE_FIREBASE_API_KEY: AIzaSyBDTaITNFHv2pG5-5Swd5tq1V586aWT6bw
+          VITE_FIREBASE_AUTH_DOMAIN: cover-kings.firebaseapp.com
+          VITE_FIREBASE_PROJECT_ID: cover-kings
+          VITE_FIREBASE_STORAGE_BUCKET: cover-kings.firebasestorage.app
+          VITE_FIREBASE_MESSAGING_SENDER_ID: "934017189984"
+          VITE_FIREBASE_APP_ID: 1:934017189984:web:3a74f80e56cfa59e729b05
+          VITE_FIREBASE_MEASUREMENT_ID: G-G48JRVL92L
 
       - name: Deploy to Firebase Hosting
         run: npx firebase-tools deploy --only hosting --token "${{ secrets.FIREBASE_TOKEN }}" --project cover-kings
