@@ -1,0 +1,461 @@
+const functions = require('firebase-functions')
+const admin = require('firebase-admin')
+const axios = require('axios')
+const fetch = require('node-fetch')
+
+admin.initializeApp()
+const db = admin.firestore()
+
+// ─────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────
+
+function getTodayDateStr() {
+  const now = new Date()
+  // Convert to ET
+  const etOffset = -5 // EST; adjust to -4 for EDT if needed
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000
+  const et = new Date(utc + 3600000 * etOffset)
+  return et.toISOString().split('T')[0]
+}
+
+function formatOdds(american) {
+  if (!american) return null
+  const n = Number(american)
+  return n > 0 ? `+${n}` : `${n}`
+}
+
+/**
+ * Build a prompt for Claude to analyze a single game.
+ */
+function buildPickPrompt(game) {
+  return `You are an expert NBA sports betting analyst. Analyze the following game and provide a single best bet recommendation.
+
+Game: ${game.away_team?.full_name} (Away) vs ${game.home_team?.full_name} (Home)
+Date: ${game.date}
+Spread: Home team ${game.spread ?? 'unknown'}
+Moneyline: Home ${formatOdds(game.home_ml) ?? 'unknown'} / Away ${formatOdds(game.away_ml) ?? 'unknown'}
+Over/Under: ${game.over_under ?? 'unknown'}
+
+Consider: recent team form (last 10 games), home/away records, key injuries if known, pace of play, and line movement context.
+
+Respond with ONLY a valid JSON object in this exact format:
+{
+  "aiPickType": "spread" | "moneyline" | "overunder",
+  "aiPick": "<exact side label e.g. 'LAL -3.5' or 'Over 224.5'>",
+  "aiConfidence": <integer 51-95>,
+  "aiAnalysis": "<2-3 sentence explanation under 280 characters>"
+}`
+}
+
+/**
+ * Call Claude API with a prompt.
+ */
+async function callClaude(prompt) {
+  const apiKey = process.env.CLAUDE_API_KEY
+  if (!apiKey) throw new Error('CLAUDE_API_KEY not set')
+
+  const response = await axios.post(
+    'https://api.anthropic.com/v1/messages',
+    {
+      model: 'claude-3-haiku-20240307',
+      max_tokens: 512,
+      messages: [{ role: 'user', content: prompt }],
+    },
+    {
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      timeout: 15000,
+    }
+  )
+  const text = response.data.content?.[0]?.text || ''
+  // Extract JSON from the response
+  const match = text.match(/\{[\s\S]*\}/)
+  if (!match) throw new Error('Claude returned no valid JSON')
+  return JSON.parse(match[0])
+}
+
+/**
+ * Fetch today's NBA games from BallDontLie API.
+ */
+async function fetchNBAGames(dateStr) {
+  try {
+    const url = `https://www.balldontlie.io/api/v1/games?dates[]=${dateStr}&per_page=30`
+    const res = await axios.get(url, { timeout: 10000 })
+    return res.data.data || []
+  } catch (err) {
+    functions.logger.error('Failed to fetch NBA games:', err.message)
+    return []
+  }
+}
+
+/**
+ * Fetch final scores for a date from BallDontLie.
+ */
+async function fetchFinalScores(dateStr) {
+  try {
+    const url = `https://www.balldontlie.io/api/v1/games?dates[]=${dateStr}&per_page=30`
+    const res = await axios.get(url, { timeout: 10000 })
+    return res.data.data?.filter((g) => g.status === 'Final') || []
+  } catch (err) {
+    functions.logger.error('Failed to fetch final scores:', err.message)
+    return []
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// 1. generateDailyPicks — scheduled 8am ET daily
+// ─────────────────────────────────────────────────────────
+exports.generateDailyPicks = functions.pubsub
+  .schedule('0 8 * * *')
+  .timeZone('America/New_York')
+  .onRun(async (_context) => {
+    const dateStr = getTodayDateStr()
+    functions.logger.info(`Generating picks for ${dateStr}`)
+
+    // Check if picks already exist
+    const existingDoc = await db.collection('picks').doc(dateStr).get()
+    if (existingDoc.exists) {
+      functions.logger.info(`Picks already exist for ${dateStr}, skipping.`)
+      return null
+    }
+
+    const rawGames = await fetchNBAGames(dateStr)
+    if (rawGames.length === 0) {
+      functions.logger.info(`No NBA games found for ${dateStr}`)
+      await db.collection('picks').doc(dateStr).set({
+        date: dateStr,
+        games: [],
+        generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        message: 'No games scheduled today.',
+      })
+      return null
+    }
+
+    // For each game, attempt to get AI pick (with graceful fallback)
+    const gamesWithPicks = await Promise.all(
+      rawGames.map(async (game) => {
+        const homeAbbr = game.home_team?.abbreviation || game.home_team?.full_name?.slice(0, 3).toUpperCase() || 'HOM'
+        const awayAbbr = game.visitor_team?.abbreviation || game.visitor_team?.full_name?.slice(0, 3).toUpperCase() || 'AWY'
+
+        // Use placeholder odds (BallDontLie free tier has no odds)
+        const spread = -3
+        const moneylineHome = -140
+        const moneylineAway = 120
+        const overUnder = 225.5
+
+        const gameData = {
+          id: String(game.id),
+          homeTeam: game.home_team?.full_name || 'Home Team',
+          awayTeam: game.visitor_team?.full_name || 'Away Team',
+          homeAbbr,
+          awayAbbr,
+          gameTime: game.datetime || `${dateStr}T00:00:00Z`,
+          spread,
+          spreadHome: `${homeAbbr} ${spread > 0 ? '+' : ''}${spread}`,
+          spreadAway: `${awayAbbr} ${spread < 0 ? '+' : ''}${-spread}`,
+          moneylineHome,
+          moneylineAway,
+          overUnder,
+          // These will be filled by AI
+          aiPickType: null,
+          aiPick: null,
+          aiConfidence: null,
+          aiAnalysis: null,
+        }
+
+        try {
+          const prompt = buildPickPrompt({
+            ...game,
+            home_team: game.home_team,
+            away_team: game.visitor_team,
+            spread,
+            home_ml: moneylineHome,
+            away_ml: moneylineAway,
+            over_under: overUnder,
+          })
+          const aiResult = await callClaude(prompt)
+          return {
+            ...gameData,
+            aiPickType: aiResult.aiPickType || null,
+            aiPick: aiResult.aiPick || null,
+            aiConfidence: aiResult.aiConfidence || null,
+            aiAnalysis: aiResult.aiAnalysis || null,
+          }
+        } catch (err) {
+          functions.logger.warn(`AI pick failed for game ${game.id}: ${err.message}`)
+          return gameData
+        }
+      })
+    )
+
+    await db.collection('picks').doc(dateStr).set({
+      date: dateStr,
+      games: gamesWithPicks,
+      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      gameCount: gamesWithPicks.length,
+    })
+
+    functions.logger.info(`Generated picks for ${gamesWithPicks.length} games on ${dateStr}`)
+    return null
+  })
+
+// ─────────────────────────────────────────────────────────
+// 2. gradeResults — scheduled 11pm ET daily
+// ─────────────────────────────────────────────────────────
+exports.gradeResults = functions.pubsub
+  .schedule('0 23 * * *')
+  .timeZone('America/New_York')
+  .onRun(async (_context) => {
+    const dateStr = getTodayDateStr()
+    functions.logger.info(`Grading results for ${dateStr}`)
+
+    const finalScores = await fetchFinalScores(dateStr)
+    if (finalScores.length === 0) {
+      functions.logger.info(`No final scores available yet for ${dateStr}`)
+      return null
+    }
+
+    // Build score map: gameId -> { homeScore, awayScore }
+    const scoreMap = {}
+    for (const g of finalScores) {
+      scoreMap[String(g.id)] = {
+        homeScore: g.home_team_score,
+        awayScore: g.visitor_team_score,
+      }
+    }
+
+    // Grade the AI picks document
+    const picksRef = db.collection('picks').doc(dateStr)
+    const picksSnap = await picksRef.get()
+    if (picksSnap.exists) {
+      const picksData = picksSnap.data()
+      const gradedGames = (picksData.games || []).map((game) => {
+        const scores = scoreMap[game.id]
+        if (!scores || !game.aiPick || !game.aiPickType) return game
+
+        const { homeScore, awayScore } = scores
+        let grade = 'PENDING'
+
+        if (game.aiPickType === 'spread') {
+          const spread = game.spread || 0
+          const homeCover = homeScore + spread - awayScore
+          if (homeCover > 0) {
+            grade = game.aiPick.includes(game.homeAbbr) ? 'W' : 'L'
+          } else if (homeCover < 0) {
+            grade = game.aiPick.includes(game.awayAbbr) ? 'W' : 'L'
+          } else {
+            grade = 'PUSH'
+          }
+        } else if (game.aiPickType === 'moneyline') {
+          const homeWon = homeScore > awayScore
+          const pickedHome = game.aiPick.includes(game.homeAbbr)
+          grade = homeWon === pickedHome ? 'W' : 'L'
+        } else if (game.aiPickType === 'overunder') {
+          const total = homeScore + awayScore
+          const ou = game.overUnder || 0
+          if (total > ou) {
+            grade = game.aiPick.toLowerCase().includes('over') ? 'W' : 'L'
+          } else if (total < ou) {
+            grade = game.aiPick.toLowerCase().includes('under') ? 'W' : 'L'
+          } else {
+            grade = 'PUSH'
+          }
+        }
+
+        return { ...game, grade, homeScore, awayScore }
+      })
+
+      await picksRef.update({ games: gradedGames, gradedAt: admin.firestore.FieldValue.serverTimestamp() })
+    }
+
+    // Grade community picks for this date
+    const communitySnap = await db.collection('community')
+      .where('grade', '==', 'PENDING')
+      .get()
+
+    const batch = db.batch()
+    const userUpdates = {}
+
+    for (const postDoc of communitySnap.docs) {
+      const post = postDoc.data()
+      const scores = scoreMap[post.gameId]
+      if (!scores) continue
+
+      const { homeScore, awayScore } = scores
+      let grade = 'PENDING'
+
+      // Find the matching game data
+      const picksSnap2 = await picksRef.get()
+      const gameData = picksSnap2.exists
+        ? (picksSnap2.data().games || []).find((g) => g.id === post.gameId)
+        : null
+
+      if (!gameData) continue
+
+      if (post.betType === 'spread') {
+        const spread = gameData.spread || 0
+        const homeCover = homeScore + spread - awayScore
+        if (homeCover > 0) {
+          grade = post.side.includes(gameData.homeAbbr) ? 'W' : 'L'
+        } else if (homeCover < 0) {
+          grade = post.side.includes(gameData.awayAbbr) ? 'W' : 'L'
+        } else {
+          grade = 'PUSH'
+        }
+      } else if (post.betType === 'moneyline') {
+        const homeWon = homeScore > awayScore
+        const pickedHome = post.side.includes(gameData.homeAbbr)
+        grade = homeWon === pickedHome ? 'W' : 'L'
+      } else if (post.betType === 'overunder') {
+        const total = homeScore + awayScore
+        const ou = gameData.overUnder || 0
+        if (total > ou) grade = post.side.toLowerCase().includes('over') ? 'W' : 'L'
+        else if (total < ou) grade = post.side.toLowerCase().includes('under') ? 'W' : 'L'
+        else grade = 'PUSH'
+      }
+
+      if (grade !== 'PENDING') {
+        batch.update(postDoc.ref, { grade })
+
+        // Accumulate user stat updates
+        if (!userUpdates[post.userId]) {
+          userUpdates[post.userId] = { wins: 0, losses: 0, pushes: 0, unitsWon: 0, unitsRisked: 0 }
+        }
+        const unitsRisked = post.units || 1
+        if (grade === 'W') {
+          userUpdates[post.userId].wins += 1
+          // Calculate units won from American odds
+          const odds = post.odds || -110
+          const unitsWon = odds > 0 ? (unitsRisked * odds) / 100 : (unitsRisked * 100) / Math.abs(odds)
+          userUpdates[post.userId].unitsWon += unitsWon
+          userUpdates[post.userId].unitsRisked += unitsRisked
+        } else if (grade === 'L') {
+          userUpdates[post.userId].losses += 1
+          userUpdates[post.userId].unitsWon -= unitsRisked
+          userUpdates[post.userId].unitsRisked += unitsRisked
+        } else if (grade === 'PUSH') {
+          userUpdates[post.userId].pushes += 1
+          userUpdates[post.userId].unitsRisked += unitsRisked
+        }
+      }
+    }
+
+    await batch.commit()
+
+    // Update user stats
+    for (const [uid, updates] of Object.entries(userUpdates)) {
+      const userRef = db.collection('users').doc(uid)
+      await userRef.update({
+        wins: admin.firestore.FieldValue.increment(updates.wins),
+        losses: admin.firestore.FieldValue.increment(updates.losses),
+        pushes: admin.firestore.FieldValue.increment(updates.pushes),
+        unitsWon: admin.firestore.FieldValue.increment(updates.unitsWon),
+        unitsRisked: admin.firestore.FieldValue.increment(updates.unitsRisked),
+        totalBets: admin.firestore.FieldValue.increment(updates.wins + updates.losses + updates.pushes),
+      })
+    }
+
+    functions.logger.info(`Graded results for ${dateStr}. Updated ${Object.keys(userUpdates).length} user profiles.`)
+    return null
+  })
+
+// ─────────────────────────────────────────────────────────
+// 3. postToSocial — HTTP callable
+// ─────────────────────────────────────────────────────────
+exports.postToSocial = functions.https.onCall(async (data, context) => {
+  // Only allow admin users (you can add your UID here)
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be signed in.')
+  }
+
+  const { date: picksDate } = data
+  if (!picksDate) {
+    throw new functions.https.HttpsError('invalid-argument', 'date is required.')
+  }
+
+  const publerApiKey = process.env.PUBLER_API_KEY
+  if (!publerApiKey) {
+    throw new functions.https.HttpsError('failed-precondition', 'PUBLER_API_KEY not configured.')
+  }
+
+  const picksSnap = await db.collection('picks').doc(picksDate).get()
+  if (!picksSnap.exists) {
+    throw new functions.https.HttpsError('not-found', `No picks found for ${picksDate}.`)
+  }
+
+  const picksData = picksSnap.data()
+  const games = (picksData.games || []).filter((g) => g.aiPick)
+
+  if (games.length === 0) {
+    throw new functions.https.HttpsError('not-found', 'No AI picks to post.')
+  }
+
+  // Format the social post text
+  const dateLabel = new Date(picksDate + 'T12:00:00').toLocaleDateString('en-US', {
+    weekday: 'long', month: 'short', day: 'numeric',
+  })
+
+  let postText = `🏀 NBA Picks - ${dateLabel}\n\n`
+  for (const game of games.slice(0, 5)) {
+    const confidence = game.aiConfidence ? ` (${game.aiConfidence}%)` : ''
+    postText += `• ${game.awayAbbr} @ ${game.homeAbbr}: ${game.aiPick}${confidence}\n`
+  }
+  postText += `\n📊 Full analysis + community picks: https://nba-picks-community.web.app\n\n#NBA #SportsBetting #NBAPicksToday`
+
+  // Post to Publer
+  const publerRes = await fetch('https://api.publer.io/v1/posts', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${publerApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      text: postText,
+      schedule_type: 'now',
+    }),
+  })
+
+  if (!publerRes.ok) {
+    const errText = await publerRes.text()
+    functions.logger.error('Publer API error:', errText)
+    throw new functions.https.HttpsError('internal', 'Failed to post to social media.')
+  }
+
+  const publerData = await publerRes.json()
+  functions.logger.info('Posted to social media via Publer:', publerData)
+
+  return { success: true, postId: publerData.id, text: postText }
+})
+
+// ─────────────────────────────────────────────────────────
+// 4. onUserCreate — Auth onCreate trigger
+// ─────────────────────────────────────────────────────────
+exports.onUserCreate = functions.auth.user().onCreate(async (user) => {
+  const { uid, displayName, email, photoURL } = user
+
+  functions.logger.info(`New user created: ${uid} (${email})`)
+
+  try {
+    await db.collection('users').doc(uid).set({
+      uid,
+      displayName: displayName || 'Anonymous',
+      email: email || null,
+      photoURL: photoURL || null,
+      wins: 0,
+      losses: 0,
+      pushes: 0,
+      totalBets: 0,
+      unitsWon: 0,
+      unitsRisked: 0,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    })
+    functions.logger.info(`User profile created for ${uid}`)
+  } catch (err) {
+    functions.logger.error(`Failed to create user profile for ${uid}:`, err)
+  }
+})
