@@ -1,0 +1,115 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================
+    // Helper functions
+    // =========================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isValidCommunityPick() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['userId', 'gameId', 'betType', 'side', 'odds', 'units', 'createdAt'])
+        && data.userId == request.auth.uid
+        && data.odds is number
+        && data.units is number
+        && data.betType in ['spread', 'moneyline', 'overunder']
+        && data.analysis.size() <= 280;
+    }
+
+    function isValidMessage() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['userId', 'text', 'createdAt'])
+        && data.userId == request.auth.uid
+        && data.text.size() > 0
+        && data.text.size() <= 500;
+    }
+
+    function isValidVote() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['userId', 'gameId', 'betType', 'side'])
+        && data.userId == request.auth.uid
+        && data.betType in ['spread', 'moneyline', 'overunder'];
+    }
+
+    // =========================================================
+    // /picks/{date} - AI generated picks for a given date
+    // Public read, no client write (server only via Admin SDK)
+    // =========================================================
+    match /picks/{date} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // =========================================================
+    // /results/{date} - Graded results for a given date
+    // Public read, no client write (server only via Admin SDK)
+    // =========================================================
+    match /results/{date} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // =========================================================
+    // /community/{postId} - Community pick posts
+    // Public read, auth required for create, owner can update/delete
+    // =========================================================
+    match /community/{postId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidCommunityPick();
+      allow update: if isOwner(resource.data.userId)
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // =========================================================
+    // /threads/{gameId}/messages/{msgId} - Real-time game chat
+    // Public read, auth required for create, owner can delete
+    // =========================================================
+    match /threads/{gameId}/messages/{msgId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidMessage();
+      allow update: if false;
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // =========================================================
+    // /users/{uid} - User profiles and stats
+    // Public read, only owner can write
+    // =========================================================
+    match /users/{uid} {
+      allow read: if true;
+      allow create: if isOwner(uid);
+      allow update: if isOwner(uid)
+        && request.resource.data.uid == resource.data.uid;
+      allow delete: if false;
+    }
+
+    // =========================================================
+    // /votes/{voteId} - Game votes (spread/ML/OU)
+    // Auth required for read/write, only owner can write
+    // voteId convention: {gameId}_{betType}_{userId}
+    // =========================================================
+    match /votes/{voteId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidVote()
+        && request.resource.data.userId == request.auth.uid;
+      allow update: if isOwner(resource.data.userId) && isValidVote();
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // Vote aggregates - public read, server writes only
+    match /voteAggregates/{gameId} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}
