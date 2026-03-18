@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "cover-kings",
     "public": "dist",
     "ignore": [
       "firebase.json",
