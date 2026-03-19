@@ -4,6 +4,7 @@ import {
   getDoc,
   getDocs,
   addDoc,
+  deleteDoc,
   setDoc,
   updateDoc,
   query,
@@ -121,7 +122,7 @@ export async function getCommunityFeedByUser(userId, pageLimit = 20, lastDoc = n
 /**
  * Submit a community pick post.
  * @param {string} userId
- * @param {Object} pickData - gameId, betType, side, odds, units, analysis, gameLabel
+ * @param {Object} pickData - gameId, betType, side, odds, units, analysis, gameLabel, displayName, photoURL, date
  * @returns {Promise<import('firebase/firestore').DocumentReference>}
  */
 export async function submitCommunityPick(userId, pickData) {
@@ -136,9 +137,49 @@ export async function submitCommunityPick(userId, pickData) {
     analysis: pickData.analysis || '',
     grade: 'PENDING',
     likes: 0,
+    displayName: pickData.displayName || 'Anonymous',
+    photoURL: pickData.photoURL || null,
+    date: pickData.date || null,
     createdAt: serverTimestamp(),
   }
   return addDoc(collection(db, 'community'), data)
+}
+
+/**
+ * Delete a community pick post (owner only).
+ * @param {string} postId
+ */
+export async function deleteCommunityPick(postId) {
+  return deleteDoc(doc(db, 'community', postId))
+}
+
+/**
+ * Get paginated community feed filtered by date.
+ * @param {string} dateStr - yyyy-MM-dd
+ * @param {number} pageLimit
+ * @param {import('firebase/firestore').DocumentSnapshot|null} lastDoc
+ * @returns {Promise<{posts: Array, lastDoc: DocumentSnapshot|null}>}
+ */
+export async function getCommunityFeedByDate(dateStr, pageLimit = 20, lastDoc = null) {
+  let q = query(
+    collection(db, 'community'),
+    where('date', '==', dateStr),
+    orderBy('createdAt', 'desc'),
+    limit(pageLimit)
+  )
+  if (lastDoc) {
+    q = query(
+      collection(db, 'community'),
+      where('date', '==', dateStr),
+      orderBy('createdAt', 'desc'),
+      startAfter(lastDoc),
+      limit(pageLimit)
+    )
+  }
+  const snap = await getDocs(q)
+  const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+  const nextLastDoc = snap.docs.length === pageLimit ? snap.docs[snap.docs.length - 1] : null
+  return { posts, lastDoc: nextLastDoc }
 }
 
 /**

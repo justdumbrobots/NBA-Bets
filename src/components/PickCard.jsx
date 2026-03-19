@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Heart, MessageSquare, Clock } from 'lucide-react'
+import { Heart, MessageSquare, Clock, Trash2 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import GradeTag from './GradeTag'
 import { useAuth } from '../hooks/useAuth'
-import { toggleLike, hasUserLiked, getUserProfile } from '../firebase/firestore'
+import { toggleLike, hasUserLiked, deleteCommunityPick } from '../firebase/firestore'
 
 const BET_TYPE_LABELS = {
   spread: 'Spread',
@@ -20,7 +20,8 @@ export default function PickCard({ post }) {
   const [liked, setLiked] = useState(false)
   const [likeCount, setLikeCount] = useState(post.likes || 0)
   const [likeLoading, setLikeLoading] = useState(false)
-  const [authorProfile, setAuthorProfile] = useState(null)
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [deleted, setDeleted] = useState(false)
 
   const {
     id,
@@ -42,11 +43,20 @@ export default function PickCard({ post }) {
     hasUserLiked(id, user.uid).then(setLiked)
   }, [id, user])
 
-  // Load author profile for record display
-  useEffect(() => {
-    if (!userId) return
-    getUserProfile(userId).then((p) => setAuthorProfile(p))
-  }, [userId])
+  const handleDelete = async () => {
+    if (!deleteConfirm) {
+      setDeleteConfirm(true)
+      setTimeout(() => setDeleteConfirm(false), 3000)
+      return
+    }
+    try {
+      await deleteCommunityPick(id)
+      setDeleted(true)
+    } catch (err) {
+      console.error('Failed to delete pick:', err)
+      setDeleteConfirm(false)
+    }
+  }
 
   const handleLike = async () => {
     if (!isAuthenticated || likeLoading) return
@@ -74,11 +84,11 @@ export default function PickCard({ post }) {
   const oddsDisplay = odds > 0 ? `+${odds}` : `${odds}`
   const unitsDisplay = `${units}u`
 
-  const displayName = post.displayName || authorProfile?.displayName || 'Anonymous'
-  const photoURL = post.photoURL || authorProfile?.photoURL || null
-  const wins = authorProfile?.wins ?? 0
-  const losses = authorProfile?.losses ?? 0
-  const winPct = wins + losses > 0 ? Math.round((wins / (wins + losses)) * 100) : 0
+  const displayName = post.displayName || 'Anonymous'
+  const photoURL = post.photoURL || null
+  const isOwner = user?.uid === userId
+
+  if (deleted) return null
 
   return (
     <div className="bg-gray-800 rounded-xl border border-gray-700 p-4 hover:border-gray-600 transition-colors duration-150 animate-fade-in">
@@ -94,12 +104,6 @@ export default function PickCard({ post }) {
           )}
           <div>
             <p className="text-sm font-semibold text-white leading-tight">{displayName}</p>
-            <p className="text-xs text-gray-500">
-              {wins}W - {losses}L
-              {wins + losses > 0 && (
-                <span className="text-gray-600"> ({winPct}%)</span>
-              )}
-            </p>
           </div>
         </div>
         <GradeTag grade={grade} />
@@ -161,9 +165,25 @@ export default function PickCard({ post }) {
             </Link>
           )}
         </div>
-        <div className="flex items-center gap-1 text-xs text-gray-500">
-          <Clock size={11} />
-          <span>{timeAgo}</span>
+        <div className="flex items-center gap-2">
+          {isOwner && (
+            <button
+              onClick={handleDelete}
+              className={`flex items-center gap-1 text-xs transition-colors duration-150 ${
+                deleteConfirm
+                  ? 'text-red-400 hover:text-red-300'
+                  : 'text-gray-600 hover:text-gray-400'
+              }`}
+              title={deleteConfirm ? 'Click again to confirm delete' : 'Delete pick'}
+            >
+              <Trash2 size={12} />
+              {deleteConfirm && <span>Confirm?</span>}
+            </button>
+          )}
+          <div className="flex items-center gap-1 text-xs text-gray-500">
+            <Clock size={11} />
+            <span>{timeAgo}</span>
+          </div>
         </div>
       </div>
     </div>
