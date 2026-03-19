@@ -34,6 +34,36 @@ export async function getTodaysPicks(date) {
 }
 
 /**
+ * Fetch picks summaries for an array of date strings (for the calendar).
+ * Returns a map of dateStr -> { date, gameCount, wins, losses, pushes, generatedAt }
+ * @param {string[]} dateStrings
+ * @returns {Promise<Object>}
+ */
+export async function getPicksSummariesForDates(dateStrings) {
+  const results = {}
+  await Promise.all(
+    dateStrings.map(async (dateStr) => {
+      const snap = await getDoc(doc(db, 'picks', dateStr))
+      if (!snap.exists()) return
+      const data = snap.data()
+      const games = data.games || []
+      const wins = games.filter((g) => g.grade === 'W').length
+      const losses = games.filter((g) => g.grade === 'L').length
+      const pushes = games.filter((g) => g.grade === 'PUSH').length
+      results[dateStr] = {
+        date: dateStr,
+        gameCount: games.length,
+        wins,
+        losses,
+        pushes,
+        generatedAt: data.generatedAt,
+      }
+    })
+  )
+  return results
+}
+
+/**
  * Get paginated community feed.
  * @param {number} pageLimit - Number of posts per page
  * @param {import('firebase/firestore').DocumentSnapshot|null} lastDoc - Cursor for pagination

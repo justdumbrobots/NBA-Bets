@@ -10,13 +10,22 @@ const db = admin.firestore()
 // Helpers
 // ─────────────────────────────────────────────────────────
 
-function getTodayDateStr() {
+function getDateStrET(offsetDays = 0) {
   const now = new Date()
-  // Convert to ET
-  const etOffset = -5 // EST; adjust to -4 for EDT if needed
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000
-  const et = new Date(utc + 3600000 * etOffset)
-  return et.toISOString().split('T')[0]
+  // Use Intl to get the correct ET date (handles DST automatically)
+  const etStr = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+  if (offsetDays === 0) return etStr
+  const d = new Date(etStr + 'T12:00:00')
+  d.setDate(d.getDate() + offsetDays)
+  return d.toISOString().split('T')[0]
+}
+
+function getTodayDateStr() {
+  return getDateStrET(0)
+}
+
+function getTomorrowDateStr() {
+  return getDateStrET(1)
 }
 
 function formatOdds(american) {
@@ -205,11 +214,18 @@ async function generatePicksForDate(dateStr, force = false) {
   return { gameCount: gamesWithPicks.length }
 }
 
+// Runs at 8am, 12pm, and 6pm ET.
+// Each run force-refreshes today's picks and seeds tomorrow's picks if missing.
 exports.generateDailyPicks = functions.pubsub
-  .schedule('0 8 * * *')
+  .schedule('0 8,12,18 * * *')
   .timeZone('America/New_York')
   .onRun(async (_context) => {
-    await generatePicksForDate(getTodayDateStr())
+    const today = getTodayDateStr()
+    const tomorrow = getTomorrowDateStr()
+    // Force-refresh today's picks on every run so data stays current
+    await generatePicksForDate(today, true)
+    // Seed tomorrow only if it doesn't exist yet
+    await generatePicksForDate(tomorrow, false)
     return null
   })
 
