@@ -6,6 +6,7 @@ import { useCommunity } from '../hooks/useCommunity'
 import { useAuth } from '../hooks/useAuth'
 
 const FILTER_TABS = [
+  { id: 'today', label: "Today's Picks" },
   { id: 'all', label: 'All Picks' },
   { id: 'mine', label: 'My Picks' },
 ]
@@ -39,7 +40,7 @@ function PickCardSkeleton() {
 
 export default function Community() {
   const { user, isAuthenticated } = useAuth()
-  const [activeFilter, setActiveFilter] = useState('all')
+  const [activeFilter, setActiveFilter] = useState('today')
   const [modalOpen, setModalOpen] = useState(false)
   const loadMoreRef = useRef(null)
 
@@ -70,6 +71,12 @@ export default function Community() {
   const handleFilterChange = (filterId) => {
     if (filterId === 'mine' && !isAuthenticated) return
     setActiveFilter(filterId)
+  }
+
+  const emptyStateMessage = {
+    today: "No picks posted yet today. Be the first!",
+    mine: "You haven't posted any picks yet. Share your first pick!",
+    all: "No picks have been posted yet.",
   }
 
   const handlePostSuccess = () => {
@@ -138,13 +145,9 @@ export default function Community() {
             <div className="w-16 h-16 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center mb-4">
               <Users size={28} className="text-gray-600" />
             </div>
-            <h3 className="text-lg font-semibold text-gray-400 mb-1">
-              {activeFilter === 'mine' ? 'No picks posted yet' : 'No picks today'}
-            </h3>
+            <h3 className="text-lg font-semibold text-gray-400 mb-1">No picks yet</h3>
             <p className="text-sm text-gray-500 max-w-xs">
-              {activeFilter === 'mine'
-                ? "You haven't posted any picks yet. Share your first pick!"
-                : 'Be the first to post a pick for today\'s games.'}
+              {emptyStateMessage[activeFilter]}
             </p>
             {isAuthenticated && (
               <button

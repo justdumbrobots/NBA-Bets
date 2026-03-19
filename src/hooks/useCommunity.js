@@ -1,21 +1,27 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { getCommunityFeed, getCommunityFeedByUser } from '../firebase/firestore'
+import { getCommunityFeed, getCommunityFeedByUser, getCommunityFeedByDate } from '../firebase/firestore'
+import { getTodayET } from './usePicks'
 
 const PAGE_SIZE = 20
 
 /**
  * useCommunity — infinite scroll hook for community picks feed.
  *
- * @param {'all' | 'mine'} filter - 'all' for global feed, 'mine' for current user's picks
+ * @param {'all' | 'today' | 'mine'} filter
  * @param {string|null} userId - required when filter === 'mine'
  * @returns react-query infinite query result + flat `posts` array
  */
 export function useCommunity(filter = 'all', userId = null) {
+  const todayStr = getTodayET()
+
   const query = useInfiniteQuery({
-    queryKey: ['community', filter, userId],
+    queryKey: ['community', filter, userId, todayStr],
     queryFn: async ({ pageParam = null }) => {
       if (filter === 'mine' && userId) {
         return getCommunityFeedByUser(userId, PAGE_SIZE, pageParam)
+      }
+      if (filter === 'today') {
+        return getCommunityFeedByDate(todayStr, PAGE_SIZE, pageParam)
       }
       return getCommunityFeed(PAGE_SIZE, pageParam)
     },

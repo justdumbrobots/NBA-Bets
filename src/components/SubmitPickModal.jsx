@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { X, ChevronDown } from 'lucide-react'
 import { submitCommunityPick } from '../firebase/firestore'
 import { useAuth } from '../hooks/useAuth'
-import { usePicks } from '../hooks/usePicks'
+import { usePicks, getTodayET } from '../hooks/usePicks'
 
 const BET_TYPES = [
   { value: 'spread', label: 'Spread' },
@@ -106,6 +106,9 @@ export default function SubmitPickModal({ isOpen, onClose, onSuccess }) {
         odds: Number(odds),
         units: Number(units),
         analysis: analysis.trim(),
+        displayName: user.displayName || 'Anonymous',
+        photoURL: user.photoURL || null,
+        date: getTodayET(),
       })
       onSuccess?.()
       handleClose()
