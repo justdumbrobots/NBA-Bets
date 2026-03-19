@@ -10,13 +10,22 @@ const db = admin.firestore()
 // Helpers
 // ─────────────────────────────────────────────────────────
 
-function getTodayDateStr() {
+function getDateStrET(offsetDays = 0) {
   const now = new Date()
-  // Convert to ET
-  const etOffset = -5 // EST; adjust to -4 for EDT if needed
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000
-  const et = new Date(utc + 3600000 * etOffset)
-  return et.toISOString().split('T')[0]
+  // Use Intl to get the correct ET date (handles DST automatically)
+  const etStr = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+  if (offsetDays === 0) return etStr
+  const d = new Date(etStr + 'T12:00:00')
+  d.setDate(d.getDate() + offsetDays)
+  return d.toISOString().split('T')[0]
+}
+
+function getTodayDateStr() {
+  return getDateStrET(0)
+}
+
+function getTomorrowDateStr() {
+  return getDateStrET(1)
 }
 
 function formatOdds(american) {
@@ -109,99 +118,147 @@ async function fetchFinalScores(dateStr) {
 // ─────────────────────────────────────────────────────────
 // 1. generateDailyPicks — scheduled 8am ET daily
 // ─────────────────────────────────────────────────────────
-exports.generateDailyPicks = functions.pubsub
-  .schedule('0 8 * * *')
-  .timeZone('America/New_York')
-  .onRun(async (_context) => {
-    const dateStr = getTodayDateStr()
-    functions.logger.info(`Generating picks for ${dateStr}`)
+/**
+ * Core picks generation logic — shared by scheduled and HTTP functions.
+ * @param {string} dateStr - yyyy-MM-dd
+ * @param {boolean} force - overwrite existing picks if true
+ * @returns {Promise<{skipped?: boolean, gameCount?: number, message?: string}>}
+ */
+async function generatePicksForDate(dateStr, force = false) {
+  functions.logger.info(`Generating picks for ${dateStr} (force=${force})`)
 
-    // Check if picks already exist
+  if (!force) {
     const existingDoc = await db.collection('picks').doc(dateStr).get()
     if (existingDoc.exists) {
       functions.logger.info(`Picks already exist for ${dateStr}, skipping.`)
-      return null
+      return { skipped: true }
     }
+  }
 
-    const rawGames = await fetchNBAGames(dateStr)
-    if (rawGames.length === 0) {
-      functions.logger.info(`No NBA games found for ${dateStr}`)
-      await db.collection('picks').doc(dateStr).set({
-        date: dateStr,
-        games: [],
-        generatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        message: 'No games scheduled today.',
-      })
-      return null
-    }
-
-    // For each game, attempt to get AI pick (with graceful fallback)
-    const gamesWithPicks = await Promise.all(
-      rawGames.map(async (game) => {
-        const homeAbbr = game.home_team?.abbreviation || game.home_team?.full_name?.slice(0, 3).toUpperCase() || 'HOM'
-        const awayAbbr = game.visitor_team?.abbreviation || game.visitor_team?.full_name?.slice(0, 3).toUpperCase() || 'AWY'
-
-        // Use placeholder odds (BallDontLie free tier has no odds)
-        const spread = -3
-        const moneylineHome = -140
-        const moneylineAway = 120
-        const overUnder = 225.5
-
-        const gameData = {
-          id: String(game.id),
-          homeTeam: game.home_team?.full_name || 'Home Team',
-          awayTeam: game.visitor_team?.full_name || 'Away Team',
-          homeAbbr,
-          awayAbbr,
-          gameTime: game.datetime || `${dateStr}T00:00:00Z`,
-          spread,
-          spreadHome: `${homeAbbr} ${spread > 0 ? '+' : ''}${spread}`,
-          spreadAway: `${awayAbbr} ${spread < 0 ? '+' : ''}${-spread}`,
-          moneylineHome,
-          moneylineAway,
-          overUnder,
-          // These will be filled by AI
-          aiPickType: null,
-          aiPick: null,
-          aiConfidence: null,
-          aiAnalysis: null,
-        }
-
-        try {
-          const prompt = buildPickPrompt({
-            ...game,
-            home_team: game.home_team,
-            away_team: game.visitor_team,
-            spread,
-            home_ml: moneylineHome,
-            away_ml: moneylineAway,
-            over_under: overUnder,
-          })
-          const aiResult = await callClaude(prompt)
-          return {
-            ...gameData,
-            aiPickType: aiResult.aiPickType || null,
-            aiPick: aiResult.aiPick || null,
-            aiConfidence: aiResult.aiConfidence || null,
-            aiAnalysis: aiResult.aiAnalysis || null,
-          }
-        } catch (err) {
-          functions.logger.warn(`AI pick failed for game ${game.id}: ${err.message}`)
-          return gameData
-        }
-      })
-    )
-
+  const rawGames = await fetchNBAGames(dateStr)
+  if (rawGames.length === 0) {
+    functions.logger.info(`No NBA games found for ${dateStr}`)
     await db.collection('picks').doc(dateStr).set({
       date: dateStr,
-      games: gamesWithPicks,
+      games: [],
       generatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      gameCount: gamesWithPicks.length,
+      message: 'No games scheduled today.',
     })
+    return { gameCount: 0, message: 'No games scheduled.' }
+  }
 
-    functions.logger.info(`Generated picks for ${gamesWithPicks.length} games on ${dateStr}`)
+  // For each game, attempt to get AI pick (with graceful fallback)
+  const gamesWithPicks = await Promise.all(
+    rawGames.map(async (game) => {
+      const homeAbbr = game.home_team?.abbreviation || game.home_team?.full_name?.slice(0, 3).toUpperCase() || 'HOM'
+      const awayAbbr = game.visitor_team?.abbreviation || game.visitor_team?.full_name?.slice(0, 3).toUpperCase() || 'AWY'
+
+      // Use placeholder odds (BallDontLie free tier has no odds)
+      const spread = -3
+      const moneylineHome = -140
+      const moneylineAway = 120
+      const overUnder = 225.5
+
+      const gameData = {
+        id: String(game.id),
+        homeTeam: game.home_team?.full_name || 'Home Team',
+        awayTeam: game.visitor_team?.full_name || 'Away Team',
+        homeAbbr,
+        awayAbbr,
+        gameTime: game.datetime || `${dateStr}T00:00:00Z`,
+        spread,
+        spreadHome: `${homeAbbr} ${spread > 0 ? '+' : ''}${spread}`,
+        spreadAway: `${awayAbbr} ${spread < 0 ? '+' : ''}${-spread}`,
+        moneylineHome,
+        moneylineAway,
+        overUnder,
+        aiPickType: null,
+        aiPick: null,
+        aiConfidence: null,
+        aiAnalysis: null,
+      }
+
+      try {
+        const prompt = buildPickPrompt({
+          ...game,
+          home_team: game.home_team,
+          away_team: game.visitor_team,
+          spread,
+          home_ml: moneylineHome,
+          away_ml: moneylineAway,
+          over_under: overUnder,
+        })
+        const aiResult = await callClaude(prompt)
+        return {
+          ...gameData,
+          aiPickType: aiResult.aiPickType || null,
+          aiPick: aiResult.aiPick || null,
+          aiConfidence: aiResult.aiConfidence || null,
+          aiAnalysis: aiResult.aiAnalysis || null,
+        }
+      } catch (err) {
+        functions.logger.warn(`AI pick failed for game ${game.id}: ${err.message}`)
+        return gameData
+      }
+    })
+  )
+
+  await db.collection('picks').doc(dateStr).set({
+    date: dateStr,
+    games: gamesWithPicks,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    gameCount: gamesWithPicks.length,
+  })
+
+  functions.logger.info(`Generated picks for ${gamesWithPicks.length} games on ${dateStr}`)
+  return { gameCount: gamesWithPicks.length }
+}
+
+// Runs at 8am, 12pm, and 6pm ET.
+// Each run force-refreshes today's picks and seeds tomorrow's picks if missing.
+exports.generateDailyPicks = functions.pubsub
+  .schedule('0 8,12,18 * * *')
+  .timeZone('America/New_York')
+  .onRun(async (_context) => {
+    const today = getTodayDateStr()
+    const tomorrow = getTomorrowDateStr()
+    // Force-refresh today's picks on every run so data stays current
+    await generatePicksForDate(today, true)
+    // Seed tomorrow only if it doesn't exist yet
+    await generatePicksForDate(tomorrow, false)
     return null
   })
+
+// ─────────────────────────────────────────────────────────
+// HTTP trigger to manually generate picks for a date.
+// POST /triggerPicksGeneration  { date?: "yyyy-MM-dd", force?: boolean }
+// Requires a secret header: x-admin-key == ADMIN_SECRET env var
+// ─────────────────────────────────────────────────────────
+exports.triggerPicksGeneration = functions.https.onRequest(async (req, res) => {
+  // Simple secret key guard
+  const adminSecret = process.env.ADMIN_SECRET
+  if (adminSecret && req.headers['x-admin-key'] !== adminSecret) {
+    res.status(403).json({ error: 'Forbidden' })
+    return
+  }
+
+  const dateStr = req.body?.date || getTodayDateStr()
+  const force = req.body?.force === true
+
+  // Validate date format
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    res.status(400).json({ error: 'Invalid date format. Use yyyy-MM-dd.' })
+    return
+  }
+
+  try {
+    const result = await generatePicksForDate(dateStr, force)
+    res.json({ date: dateStr, ...result })
+  } catch (err) {
+    functions.logger.error('triggerPicksGeneration failed:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
 
 // ─────────────────────────────────────────────────────────
 // 2. gradeResults — scheduled 11pm ET daily
