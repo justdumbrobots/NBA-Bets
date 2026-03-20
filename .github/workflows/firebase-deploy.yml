@@ -1,4 +1,4 @@
-name: Deploy to Firebase Hosting
+name: Deploy to Firebase
 
 on:
   push:
@@ -21,6 +21,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Functions dependencies
+        run: npm --prefix functions ci
+
       - name: Build
         run: npm run build
         env:
@@ -32,5 +35,8 @@ jobs:
           VITE_FIREBASE_APP_ID: 1:934017189984:web:3a74f80e56cfa59e729b05
           VITE_FIREBASE_MEASUREMENT_ID: G-G48JRVL92L
 
-      - name: Deploy to Firebase Hosting
+      - name: Deploy Firestore rules and indexes
+        run: npx firebase-tools deploy --only firestore --token "${{ secrets.FIREBASE_TOKEN }}" --project cover-kings
+
+      - name: Deploy Firebase Hosting
         run: npx firebase-tools deploy --only hosting --token "${{ secrets.FIREBASE_TOKEN }}" --project cover-kings
