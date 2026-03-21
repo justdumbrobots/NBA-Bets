@@ -35,8 +35,14 @@ jobs:
           VITE_FIREBASE_APP_ID: 1:934017189984:web:3a74f80e56cfa59e729b05
           VITE_FIREBASE_MEASUREMENT_ID: G-G48JRVL92L
 
+      - name: Set Functions environment variables
+        run: echo "CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }}" > functions/.env
+
       - name: Deploy Firestore rules and indexes
         run: npx firebase-tools deploy --only firestore --token "${{ secrets.FIREBASE_TOKEN }}" --project cover-kings
+
+      - name: Deploy Cloud Functions
+        run: npx firebase-tools deploy --only functions --token "${{ secrets.FIREBASE_TOKEN }}" --project cover-kings
 
       - name: Deploy Firebase Hosting
         run: npx firebase-tools deploy --only hosting --token "${{ secrets.FIREBASE_TOKEN }}" --project cover-kings
