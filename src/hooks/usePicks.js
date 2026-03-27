@@ -44,14 +44,15 @@ export function getNextUpdateLabel() {
  * usePicks — fetch AI-generated picks from Firestore for a given date string.
  * Auto-refreshes every 5 minutes to pick up Cloud Function updates.
  *
- * @param {string} dateStr - yyyy-MM-dd (defaults to today ET)
+ * @param {string} dateStr         - yyyy-MM-dd (defaults to today ET)
+ * @param {string} picksCollection - Firestore collection (default: 'picks')
  */
-export function usePicks(dateStr) {
+export function usePicks(dateStr, picksCollection = 'picks') {
   const date = dateStr || getTodayET()
 
   const query = useQuery({
-    queryKey: ['picks', date],
-    queryFn: () => getTodaysPicks(date),
+    queryKey: ['picks', picksCollection, date],
+    queryFn: () => getTodaysPicks(date, picksCollection),
     staleTime: REFETCH_INTERVAL,
     gcTime: 60 * 60 * 1000,
     retry: 2,
@@ -81,7 +82,7 @@ export function usePicks(dateStr) {
  *
  * @param {number} pastDays
  */
-export function usePicksCalendar(pastDays = 14) {
+export function usePicksCalendar(pastDays = 14, picksCollection = 'picks') {
   const today = new Date()
   const dateStrings = []
   for (let i = pastDays; i >= 0; i--) {
@@ -94,8 +95,8 @@ export function usePicksCalendar(pastDays = 14) {
   dateStrings.push(toETDateStr(tomorrow))
 
   const query = useQuery({
-    queryKey: ['picksCalendar', dateStrings[0], dateStrings[dateStrings.length - 1]],
-    queryFn: () => getPicksSummariesForDates(dateStrings),
+    queryKey: ['picksCalendar', picksCollection, dateStrings[0], dateStrings[dateStrings.length - 1]],
+    queryFn: () => getPicksSummariesForDates(dateStrings, picksCollection),
     staleTime: REFETCH_INTERVAL,
     gcTime: 60 * 60 * 1000,
     refetchInterval: REFETCH_INTERVAL,
