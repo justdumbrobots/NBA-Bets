@@ -36,7 +36,9 @@ jobs:
           VITE_FIREBASE_MEASUREMENT_ID: G-G48JRVL92L
 
       - name: Set Functions environment variables
-        run: echo "CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }}" > functions/.env
+        run: |
+          echo "CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }}" > functions/.env
+          echo "ODDS_API_KEY=${{ secrets.ODDS_API_KEY }}" >> functions/.env
 
       - name: Deploy Firestore rules and indexes
         run: npx firebase-tools deploy --only firestore --token "${{ secrets.FIREBASE_TOKEN }}" --project cover-kings
