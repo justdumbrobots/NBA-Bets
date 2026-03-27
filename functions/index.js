@@ -123,11 +123,17 @@ async function fetchNBAGames(dateStr) {
   try {
     const compact = dateStr.replace(/-/g, '')
     const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${compact}`
-    const res = await axios.get(url, { timeout: 10000 })
+    const res = await axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NBAPicksBot/1.0)' },
+    })
     const events = res.data.events || []
+    functions.logger.info(`ESPN returned ${events.length} events for ${dateStr}`)
     return events.map((e) => parseESPNEvent(e, dateStr)).filter(Boolean)
   } catch (err) {
-    functions.logger.error('Failed to fetch NBA games:', err.message)
+    const status = err.response?.status
+    const body = err.response?.data
+    functions.logger.error(`Failed to fetch NBA games for ${dateStr}: status=${status} message=${err.message}`, body)
     return []
   }
 }
