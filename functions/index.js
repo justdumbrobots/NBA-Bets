@@ -241,9 +241,25 @@ exports.generateNCAADailyPicks = functions.pubsub
   })
 
 // ─────────────────────────────────────────────────────────
-// 3. HTTP trigger: manually generate picks for any sport/date
+// 3. MLB: generateMLBDailyPicks — 11am and 5pm ET
+//    (covers afternoon day games and evening slate)
+// ─────────────────────────────────────────────────────────
+
+exports.generateMLBDailyPicks = functions.pubsub
+  .schedule('0 11,17 * * *')
+  .timeZone('America/New_York')
+  .onRun(async () => {
+    const today = getTodayET()
+    const tomorrow = getTomorrowET()
+    await generatePicksForDate(today, predictor.sports.mlb, true, 'mlb_picks')
+    await generatePicksForDate(tomorrow, predictor.sports.mlb, false, 'mlb_picks')
+    return null
+  })
+
+// ─────────────────────────────────────────────────────────
+// 4. HTTP trigger: manually generate picks for any sport/date
 //    POST /triggerPicksGeneration
-//    Body: { date?: "yyyy-MM-dd", sport?: "nba"|"ncaa", force?: boolean }
+//    Body: { date?: "yyyy-MM-dd", sport?: "nba"|"ncaa"|"mlb", force?: boolean }
 // ─────────────────────────────────────────────────────────
 
 exports.triggerPicksGeneration = functions.https.onRequest(async (req, res) => {
@@ -264,11 +280,11 @@ exports.triggerPicksGeneration = functions.https.onRequest(async (req, res) => {
 
   const sport = predictor.sports[sportKey]
   if (!sport) {
-    res.status(400).json({ error: `Unknown sport "${sportKey}". Use "nba" or "ncaa".` })
+    res.status(400).json({ error: `Unknown sport "${sportKey}". Use "nba", "ncaa", or "mlb".` })
     return
   }
 
-  const collection = sportKey === 'ncaa' ? 'ncaa_picks' : 'picks'
+  const collection = sportKey === 'ncaa' ? 'ncaa_picks' : sportKey === 'mlb' ? 'mlb_picks' : 'picks'
 
   try {
     const result = await generatePicksForDate(dateStr, sport, force, collection)
@@ -299,14 +315,26 @@ exports.gradeNCAAResults = functions.pubsub
   .schedule('0 1 * * *')
   .timeZone('America/New_York')
   .onRun(async () => {
-    // Grade yesterday's NCAA games (1am ET = after all games finish)
     const yesterday = getDateStrET(-1)
     await gradeResultsForDate(yesterday, predictor.sports.ncaa, 'ncaa_picks')
     return null
   })
 
 // ─────────────────────────────────────────────────────────
-// 6. postToSocial — HTTP callable (authenticated)
+// 6. MLB: gradeMLBResults — 2am ET (West Coast games finish ~12:30am ET)
+// ─────────────────────────────────────────────────────────
+
+exports.gradeMLBResults = functions.pubsub
+  .schedule('0 2 * * *')
+  .timeZone('America/New_York')
+  .onRun(async () => {
+    const yesterday = getDateStrET(-1)
+    await gradeResultsForDate(yesterday, predictor.sports.mlb, 'mlb_picks')
+    return null
+  })
+
+// ─────────────────────────────────────────────────────────
+// 8. postToSocial — HTTP callable (authenticated)
 // ─────────────────────────────────────────────────────────
 
 exports.postToSocial = functions.https.onCall(async (data, context) => {
@@ -324,7 +352,7 @@ exports.postToSocial = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('failed-precondition', 'PUBLER_API_KEY not configured.')
   }
 
-  const collection = sportKey === 'ncaa' ? 'ncaa_picks' : 'picks'
+  const collection = sportKey === 'ncaa' ? 'ncaa_picks' : sportKey === 'mlb' ? 'mlb_picks' : 'picks'
   const sport = predictor.sports[sportKey] || predictor.sports.nba
 
   const picksSnap = await db.collection(collection).doc(picksDate).get()
@@ -341,7 +369,7 @@ exports.postToSocial = functions.https.onCall(async (data, context) => {
     weekday: 'long', month: 'short', day: 'numeric',
   })
 
-  const emoji = sportKey === 'ncaa' ? '🏀' : '🏀'
+  const emoji = sportKey === 'mlb' ? '⚾' : '🏀'
   let postText = `${emoji} ${sport.SPORT_LABEL} Picks - ${dateLabel}\n\n`
   for (const game of games.slice(0, 5)) {
     const confidence = game.aiConfidence ? ` (${game.aiConfidence}%)` : ''
@@ -365,7 +393,7 @@ exports.postToSocial = functions.https.onCall(async (data, context) => {
 })
 
 // ─────────────────────────────────────────────────────────
-// 7. onUserCreate — Auth onCreate trigger
+// 9. onUserCreate — Auth onCreate trigger
 // ─────────────────────────────────────────────────────────
 
 exports.onUserCreate = functions.auth.user().onCreate(async (user) => {

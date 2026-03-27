@@ -18,17 +18,28 @@ function formatOdds(american) {
  * @param {string} sportLabel  - e.g. 'NBA' or 'NCAAB'
  * @returns {string}
  */
+const SPORT_CONTEXT = {
+  NBA: 'Consider: recent team form (last 10 games), home/away records, key injuries, pace of play, and line movement context.',
+  NCAAB: 'Consider: recent team form, home court advantage (larger in college), key player matchups, tournament seeding implications, pace of play, and coaching tendencies.',
+  MLB: 'Consider: starting pitcher matchup and recent ERA, bullpen strength, team batting average vs pitch type, home/away splits, ballpark factors, and weather conditions.',
+}
+
+const SPREAD_LABEL = {
+  MLB: 'Run line',
+}
+
 function buildPrompt(game, sportLabel) {
-  const isNCAA = sportLabel === 'NCAAB'
-  const context = isNCAA
-    ? 'Consider: recent team form, home court advantage (larger in college), key player matchups, tournament seeding implications, pace of play, and coaching tendencies.'
-    : 'Consider: recent team form (last 10 games), home/away records, key injuries if known, pace of play, and line movement context.'
+  const context = SPORT_CONTEXT[sportLabel] || SPORT_CONTEXT.NBA
+  const spreadLabel = SPREAD_LABEL[sportLabel] || 'Spread'
+  const homeAbbr = game.home_team?.abbreviation || 'HOM'
+  const exampleSpread = sportLabel === 'MLB' ? `${homeAbbr} -1.5` : `${homeAbbr} -3.5`
+  const exampleTotal = sportLabel === 'MLB' ? 'Over 8.5' : 'Over 224.5'
 
   return `You are an expert ${sportLabel} sports betting analyst. Analyze the following game and provide a single best bet recommendation.
 
 Game: ${game.visitor_team?.full_name} (Away) vs ${game.home_team?.full_name} (Home)
 Sport: ${sportLabel}
-Spread: Home team ${game.spread ?? 'unknown'}
+${spreadLabel}: Home team ${game.spread ?? 'unknown'}
 Moneyline: Home ${formatOdds(game.moneylineHome)} / Away ${formatOdds(game.moneylineAway)}
 Over/Under: ${game.overUnder ?? 'unknown'}
 
@@ -37,7 +48,7 @@ ${context}
 Respond with ONLY a valid JSON object in this exact format:
 {
   "aiPickType": "spread" | "moneyline" | "overunder",
-  "aiPick": "<exact side label e.g. '${game.home_team?.abbreviation} -3.5' or 'Over 224.5'>",
+  "aiPick": "<exact side label e.g. '${exampleSpread}' or '${exampleTotal}'>",
   "aiConfidence": <integer 51-95>,
   "aiAnalysis": "<2-3 sentence explanation under 280 characters>"
 }`
