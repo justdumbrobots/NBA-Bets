@@ -540,7 +540,7 @@ exports.postToSocial = functions.https.onCall(async (data, context) => {
     const confidence = game.aiConfidence ? ` (${game.aiConfidence}%)` : ''
     postText += `• ${game.awayAbbr} @ ${game.homeAbbr}: ${game.aiPick}${confidence}\n`
   }
-  postText += `\n📊 Full analysis + community picks: https://nba-picks-community.web.app\n\n#NBA #SportsBetting #NBAPicksToday`
+  postText += `\n📊 Full analysis + community picks: https://coverkingsbets.com\n\n#NBA #SportsBetting #NBAPicksToday`
 
   // Post to Publer
   const publerRes = await fetch('https://api.publer.io/v1/posts', {
