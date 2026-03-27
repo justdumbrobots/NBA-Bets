@@ -87,66 +87,105 @@ async function callClaude(prompt) {
   return JSON.parse(match[0])
 }
 
-/**
- * Fetch today's NBA games from BallDontLie API.
- */
-/**
- * Parse ESPN scoreboard event into a normalised game object.
- */
-function parseESPNEvent(event, dateStr) {
-  const competition = event.competitions?.[0]
-  if (!competition) return null
+const ODDS_API_BASE = 'https://api.the-odds-api.com/v4'
 
-  const home = competition.competitors?.find((c) => c.homeAway === 'home')
-  const away = competition.competitors?.find((c) => c.homeAway === 'away')
-  if (!home || !away) return null
+const NBA_ABBR = {
+  'Atlanta Hawks': 'ATL', 'Boston Celtics': 'BOS', 'Brooklyn Nets': 'BKN',
+  'Charlotte Hornets': 'CHA', 'Chicago Bulls': 'CHI', 'Cleveland Cavaliers': 'CLE',
+  'Dallas Mavericks': 'DAL', 'Denver Nuggets': 'DEN', 'Detroit Pistons': 'DET',
+  'Golden State Warriors': 'GSW', 'Houston Rockets': 'HOU', 'Indiana Pacers': 'IND',
+  'Los Angeles Clippers': 'LAC', 'Los Angeles Lakers': 'LAL', 'Memphis Grizzlies': 'MEM',
+  'Miami Heat': 'MIA', 'Milwaukee Bucks': 'MIL', 'Minnesota Timberwolves': 'MIN',
+  'New Orleans Pelicans': 'NOP', 'New York Knicks': 'NYK', 'Oklahoma City Thunder': 'OKC',
+  'Orlando Magic': 'ORL', 'Philadelphia 76ers': 'PHI', 'Phoenix Suns': 'PHX',
+  'Portland Trail Blazers': 'POR', 'Sacramento Kings': 'SAC', 'San Antonio Spurs': 'SAS',
+  'Toronto Raptors': 'TOR', 'Utah Jazz': 'UTA', 'Washington Wizards': 'WAS',
+}
+
+function getAbbr(teamName) {
+  return NBA_ABBR[teamName] || teamName.split(' ').pop().slice(0, 3).toUpperCase()
+}
+
+
+/**
+ * Parse an Odds API event into our internal game format.
+ */
+function parseOddsEvent(event) {
+  const book = (event.bookmakers || []).find((b) =>
+    ['draftkings', 'fanduel', 'betmgm', 'caesars'].includes(b.key)
+  ) || event.bookmakers?.[0]
+
+  const h2h = book?.markets?.find((m) => m.key === 'h2h')
+  const spreads = book?.markets?.find((m) => m.key === 'spreads')
+  const totals = book?.markets?.find((m) => m.key === 'totals')
+
+  const homeML = h2h?.outcomes?.find((o) => o.name === event.home_team)?.price ?? null
+  const awayML = h2h?.outcomes?.find((o) => o.name === event.away_team)?.price ?? null
+  const homeSpread = spreads?.outcomes?.find((o) => o.name === event.home_team)?.point ?? null
+  const overUnder = totals?.outcomes?.find((o) => o.name === 'Over')?.point ?? null
 
   return {
-    id: String(event.id),
-    home_team: {
-      full_name: home.team?.displayName || home.team?.name || 'Home Team',
-      abbreviation: home.team?.abbreviation || 'HOM',
-    },
-    visitor_team: {
-      full_name: away.team?.displayName || away.team?.name || 'Away Team',
-      abbreviation: away.team?.abbreviation || 'AWY',
-    },
-    datetime: event.date,
-    date: dateStr,
-    status: competition.status?.type?.completed ? 'Final' : competition.status?.type?.description || 'Scheduled',
-    home_team_score: parseInt(home.score || '0', 10),
-    visitor_team_score: parseInt(away.score || '0', 10),
+    id: event.id,
+    home_team: { full_name: event.home_team, abbreviation: getAbbr(event.home_team) },
+    visitor_team: { full_name: event.away_team, abbreviation: getAbbr(event.away_team) },
+    datetime: event.commence_time,
+    spread: homeSpread,
+    moneylineHome: homeML,
+    moneylineAway: awayML,
+    overUnder,
   }
 }
 
+/**
+ * Fetch NBA games for a date from The Odds API (includes real betting lines).
+ */
 async function fetchNBAGames(dateStr) {
+  const apiKey = process.env.ODDS_API_KEY
+  if (!apiKey) {
+    functions.logger.error('ODDS_API_KEY not configured')
+    return []
+  }
   try {
-    const compact = dateStr.replace(/-/g, '')
-    const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${compact}`
-    const res = await axios.get(url, {
-      timeout: 10000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NBAPicksBot/1.0)' },
-    })
-    const events = res.data.events || []
-    functions.logger.info(`ESPN returned ${events.length} events for ${dateStr}`)
-    return events.map((e) => parseESPNEvent(e, dateStr)).filter(Boolean)
+    const dateFrom = encodeURIComponent(`${dateStr}T00:00:00Z`)
+    const dateTo = encodeURIComponent(`${dateStr}T23:59:59Z`)
+    const url = `${ODDS_API_BASE}/sports/basketball_nba/odds/?apiKey=${apiKey}&regions=us&markets=h2h,spreads,totals&dateFormat=iso&oddsFormat=american&commenceTimeFrom=${dateFrom}&commenceTimeTo=${dateTo}`
+    const res = await axios.get(url, { timeout: 10000 })
+    const events = res.data || []
+    functions.logger.info(`Odds API returned ${events.length} games for ${dateStr}. Remaining requests: ${res.headers['x-requests-remaining']}`)
+    return events.map(parseOddsEvent).filter(Boolean)
   } catch (err) {
-    const status = err.response?.status
-    const body = err.response?.data
-    functions.logger.error(`Failed to fetch NBA games for ${dateStr}: status=${status} message=${err.message}`, body)
+    functions.logger.error(`Failed to fetch NBA games for ${dateStr}: status=${err.response?.status} ${err.message}`)
     return []
   }
 }
 
 /**
- * Fetch final scores for a date from ESPN.
+ * Fetch completed game scores for a date from The Odds API.
  */
 async function fetchFinalScores(dateStr) {
+  const apiKey = process.env.ODDS_API_KEY
+  if (!apiKey) {
+    functions.logger.error('ODDS_API_KEY not configured')
+    return []
+  }
   try {
-    const games = await fetchNBAGames(dateStr)
-    return games.filter((g) => g.status === 'Final')
+    const url = `${ODDS_API_BASE}/sports/basketball_nba/scores/?apiKey=${apiKey}&daysFrom=3&dateFormat=iso`
+    const res = await axios.get(url, { timeout: 10000 })
+    const events = (res.data || []).filter((e) => {
+      const gameDate = e.commence_time?.slice(0, 10)
+      return gameDate === dateStr && e.completed === true
+    })
+    functions.logger.info(`Odds API returned ${events.length} completed games for ${dateStr}`)
+    return events.map((e) => ({
+      id: e.id,
+      home_team: { full_name: e.home_team, abbreviation: getAbbr(e.home_team) },
+      visitor_team: { full_name: e.away_team, abbreviation: getAbbr(e.away_team) },
+      status: 'Final',
+      home_team_score: Number(e.scores?.find((s) => s.name === e.home_team)?.score ?? 0),
+      visitor_team_score: Number(e.scores?.find((s) => s.name === e.away_team)?.score ?? 0),
+    }))
   } catch (err) {
-    functions.logger.error('Failed to fetch final scores:', err.message)
+    functions.logger.error(`Failed to fetch final scores for ${dateStr}: ${err.message}`)
     return []
   }
 }
@@ -189,11 +228,10 @@ async function generatePicksForDate(dateStr, force = false) {
       const homeAbbr = game.home_team?.abbreviation || game.home_team?.full_name?.slice(0, 3).toUpperCase() || 'HOM'
       const awayAbbr = game.visitor_team?.abbreviation || game.visitor_team?.full_name?.slice(0, 3).toUpperCase() || 'AWY'
 
-      // Use placeholder odds (BallDontLie free tier has no odds)
-      const spread = -3
-      const moneylineHome = -140
-      const moneylineAway = 120
-      const overUnder = 225.5
+      const spread = game.spread ?? null
+      const moneylineHome = game.moneylineHome ?? null
+      const moneylineAway = game.moneylineAway ?? null
+      const overUnder = game.overUnder ?? null
 
       const gameData = {
         id: String(game.id),
@@ -203,8 +241,8 @@ async function generatePicksForDate(dateStr, force = false) {
         awayAbbr,
         gameTime: game.datetime || `${dateStr}T00:00:00Z`,
         spread,
-        spreadHome: `${homeAbbr} ${spread > 0 ? '+' : ''}${spread}`,
-        spreadAway: `${awayAbbr} ${spread < 0 ? '+' : ''}${-spread}`,
+        spreadHome: spread != null ? `${homeAbbr} ${spread > 0 ? '+' : ''}${spread}` : null,
+        spreadAway: spread != null ? `${awayAbbr} ${spread < 0 ? '+' : ''}${-spread}` : null,
         moneylineHome,
         moneylineAway,
         overUnder,
