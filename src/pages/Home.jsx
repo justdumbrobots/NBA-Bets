@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { format, parseISO } from 'date-fns'
 import { Calendar, RefreshCw, Zap, Clock, ChevronLeft, ChevronRight } from 'lucide-react'
 import { usePicks, usePicksCalendar, getTodayET, getTomorrowET, getNextUpdateLabel } from '../hooks/usePicks'
+import { useSport } from '../context/SportContext'
 import GameCard from '../components/GameCard'
 
 // ─── Skeleton ──────────────────────────────────────────────────────────────
@@ -83,8 +84,8 @@ function UpdateBanner({ generatedAt, isTomorrow }) {
 
 // ─── Calendar Strip ─────────────────────────────────────────────────────────
 
-function CalendarStrip({ selectedDate, onSelectDate }) {
-  const { summaries, dateStrings } = usePicksCalendar(14)
+function CalendarStrip({ selectedDate, onSelectDate, collection }) {
+  const { summaries, dateStrings } = usePicksCalendar(14, collection)
   const todayStr = getTodayET()
   const tomorrowStr = getTomorrowET()
   const scrollRef = useRef(null)
@@ -187,15 +188,21 @@ export default function Home() {
   const todayStr = getTodayET()
   const tomorrowStr = getTomorrowET()
   const [selectedDate, setSelectedDate] = useState(todayStr)
+  const { sport } = useSport()
 
-  const { games, generatedAt, isLoading, isError, isEmpty, refetch } = usePicks(selectedDate)
+  // Reset to today when sport changes so stale dates don't carry over
+  useEffect(() => {
+    setSelectedDate(getTodayET())
+  }, [sport.key])
+
+  const { games, generatedAt, isLoading, isError, isEmpty, refetch } = usePicks(selectedDate, sport.collection)
 
   const isTomorrow = selectedDate === tomorrowStr
   const isPast = selectedDate < todayStr
 
   const headingLabel = (() => {
-    if (selectedDate === todayStr) return "Today's Picks"
-    if (isTomorrow) return "Tomorrow's Picks"
+    if (selectedDate === todayStr) return `Today's ${sport.label} Picks`
+    if (isTomorrow) return `Tomorrow's ${sport.label} Picks`
     try { return format(parseISO(selectedDate), 'MMM d Picks') } catch { return 'Picks' }
   })()
 
@@ -234,7 +241,7 @@ export default function Home() {
         </div>
 
         {/* Calendar strip */}
-        <CalendarStrip selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+        <CalendarStrip selectedDate={selectedDate} onSelectDate={setSelectedDate} collection={sport.collection} />
 
         {/* Update banner (today and tomorrow only) */}
         {(selectedDate === todayStr || isTomorrow) && (
