@@ -90,11 +90,42 @@ async function callClaude(prompt) {
 /**
  * Fetch today's NBA games from BallDontLie API.
  */
+/**
+ * Parse ESPN scoreboard event into a normalised game object.
+ */
+function parseESPNEvent(event, dateStr) {
+  const competition = event.competitions?.[0]
+  if (!competition) return null
+
+  const home = competition.competitors?.find((c) => c.homeAway === 'home')
+  const away = competition.competitors?.find((c) => c.homeAway === 'away')
+  if (!home || !away) return null
+
+  return {
+    id: String(event.id),
+    home_team: {
+      full_name: home.team?.displayName || home.team?.name || 'Home Team',
+      abbreviation: home.team?.abbreviation || 'HOM',
+    },
+    visitor_team: {
+      full_name: away.team?.displayName || away.team?.name || 'Away Team',
+      abbreviation: away.team?.abbreviation || 'AWY',
+    },
+    datetime: event.date,
+    date: dateStr,
+    status: competition.status?.type?.completed ? 'Final' : competition.status?.type?.description || 'Scheduled',
+    home_team_score: parseInt(home.score || '0', 10),
+    visitor_team_score: parseInt(away.score || '0', 10),
+  }
+}
+
 async function fetchNBAGames(dateStr) {
   try {
-    const url = `https://www.balldontlie.io/api/v1/games?dates[]=${dateStr}&per_page=30`
+    const compact = dateStr.replace(/-/g, '')
+    const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${compact}`
     const res = await axios.get(url, { timeout: 10000 })
-    return res.data.data || []
+    const events = res.data.events || []
+    return events.map((e) => parseESPNEvent(e, dateStr)).filter(Boolean)
   } catch (err) {
     functions.logger.error('Failed to fetch NBA games:', err.message)
     return []
@@ -102,13 +133,12 @@ async function fetchNBAGames(dateStr) {
 }
 
 /**
- * Fetch final scores for a date from BallDontLie.
+ * Fetch final scores for a date from ESPN.
  */
 async function fetchFinalScores(dateStr) {
   try {
-    const url = `https://www.balldontlie.io/api/v1/games?dates[]=${dateStr}&per_page=30`
-    const res = await axios.get(url, { timeout: 10000 })
-    return res.data.data?.filter((g) => g.status === 'Final') || []
+    const games = await fetchNBAGames(dateStr)
+    return games.filter((g) => g.status === 'Final')
   } catch (err) {
     functions.logger.error('Failed to fetch final scores:', err.message)
     return []
