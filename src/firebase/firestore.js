@@ -26,9 +26,9 @@ import { format } from 'date-fns'
  * @param {Date|string} date - Date object or string in yyyy-MM-dd format
  * @returns {Promise<{games: Array, generatedAt: any}|null>}
  */
-export async function getTodaysPicks(date) {
+export async function getTodaysPicks(date, picksCollection = 'picks') {
   const dateStr = typeof date === 'string' ? date : format(date, 'yyyy-MM-dd')
-  const docRef = doc(db, 'picks', dateStr)
+  const docRef = doc(db, picksCollection, dateStr)
   const snap = await getDoc(docRef)
   if (!snap.exists()) return null
   return { id: snap.id, ...snap.data() }
@@ -38,13 +38,14 @@ export async function getTodaysPicks(date) {
  * Fetch picks summaries for an array of date strings (for the calendar).
  * Returns a map of dateStr -> { date, gameCount, wins, losses, pushes, generatedAt }
  * @param {string[]} dateStrings
+ * @param {string} picksCollection
  * @returns {Promise<Object>}
  */
-export async function getPicksSummariesForDates(dateStrings) {
+export async function getPicksSummariesForDates(dateStrings, picksCollection = 'picks') {
   const results = {}
   await Promise.all(
     dateStrings.map(async (dateStr) => {
-      const snap = await getDoc(doc(db, 'picks', dateStr))
+      const snap = await getDoc(doc(db, picksCollection, dateStr))
       if (!snap.exists()) return
       const data = snap.data()
       const games = data.games || []
