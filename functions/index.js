@@ -67,7 +67,7 @@ async function callClaude(prompt) {
   const response = await axios.post(
     'https://api.anthropic.com/v1/messages',
     {
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 512,
       messages: [{ role: 'user', content: prompt }],
     },
@@ -147,7 +147,12 @@ async function fetchNBAGames(dateStr) {
   }
   try {
     const dateFrom = encodeURIComponent(`${dateStr}T00:00:00Z`)
-    const dateTo = encodeURIComponent(`${dateStr}T23:59:59Z`)
+    // NBA games tip off as late as 10:30pm ET. EDT = UTC-4, EST = UTC-5.
+    // Extend window to next day 06:00Z to capture all games regardless of DST.
+    const d = new Date(`${dateStr}T12:00:00Z`)
+    d.setUTCDate(d.getUTCDate() + 1)
+    const nextDay = d.toISOString().slice(0, 10)
+    const dateTo = encodeURIComponent(`${nextDay}T06:00:00Z`)
     const url = `${ODDS_API_BASE}/sports/basketball_nba/odds/?apiKey=${apiKey}&regions=us&markets=h2h,spreads,totals&dateFormat=iso&oddsFormat=american&commenceTimeFrom=${dateFrom}&commenceTimeTo=${dateTo}`
     const res = await axios.get(url, { timeout: 10000 })
     const events = res.data || []
