@@ -3,7 +3,7 @@
 /**
  * @cover-kings/predictor
  *
- * Sports betting prediction engine supporting NBA and NCAA basketball.
+ * Sports betting prediction engine supporting NBA, NCAA basketball, and MLB.
  *
  * Usage:
  *   const { sports, fetchGames, fetchFinalScores, analyzePick, gradeAIPick, gradeCommunityPick } = require('./predictor')
@@ -20,11 +20,12 @@
 
 const nba = require('./sports/nba')
 const ncaa = require('./sports/ncaa')
+const mlb = require('./sports/mlb')
 const { fetchGames: _fetchGames, fetchFinalScores: _fetchFinalScores } = require('./odds')
 const { buildPrompt, analyzePick } = require('./analyzer')
 const { gradeAIPick, gradeCommunityPick } = require('./grader')
 
-const sports = { nba, ncaa }
+const sports = { nba, ncaa, mlb }
 
 /**
  * Fetch games with real betting lines for a sport and date.
