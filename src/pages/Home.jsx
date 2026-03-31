@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { format, parseISO } from 'date-fns'
-import { Calendar, RefreshCw, Zap, Clock, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Calendar, RefreshCw, Zap, Clock, ChevronLeft, ChevronRight, TrendingUp } from 'lucide-react'
 import { usePicks, usePicksCalendar, getTodayET, getTomorrowET, getNextUpdateLabel } from '../hooks/usePicks'
 import { useSport } from '../context/SportContext'
 import GameCard from '../components/GameCard'
@@ -182,6 +182,46 @@ function CalendarStrip({ selectedDate, onSelectDate, collection }) {
   )
 }
 
+// ─── Picks of the Day Banner ────────────────────────────────────────────────
+
+function PicksOfTheDayBanner({ games, sport }) {
+  const picks = games.filter((g) => g.aiPick && g.aiConfidence)
+  if (picks.length === 0) return null
+
+  const top = [...picks].sort((a, b) => (b.aiConfidence ?? 0) - (a.aiConfidence ?? 0)).slice(0, 3)
+
+  return (
+    <div className="mb-6 rounded-xl border border-orange-500/30 bg-gradient-to-r from-orange-500/10 via-orange-400/5 to-transparent p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <TrendingUp size={15} className="text-orange-400" />
+        <span className="text-sm font-bold text-orange-400 uppercase tracking-wide">
+          {sport.label} Picks of the Day
+        </span>
+        <span className="ml-auto text-xs text-gray-500">
+          {picks.length} AI pick{picks.length !== 1 ? 's' : ''} generated
+        </span>
+      </div>
+      <div className="flex flex-col sm:flex-row gap-2">
+        {top.map((game) => (
+          <div
+            key={game.id}
+            className="flex-1 flex items-center justify-between gap-3 bg-gray-800/60 rounded-lg px-3 py-2.5 border border-gray-700/50"
+          >
+            <div className="min-w-0">
+              <p className="text-xs text-gray-400 truncate">{game.awayAbbr} @ {game.homeAbbr}</p>
+              <p className="text-sm font-bold text-white truncate">{game.aiPick}</p>
+            </div>
+            <div className="shrink-0 flex flex-col items-end gap-0.5">
+              <span className="text-xs font-semibold text-orange-400">{game.aiConfidence}%</span>
+              <span className="text-xs text-gray-500 capitalize">{game.aiPickType}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Home Page ──────────────────────────────────────────────────────────────
 
 export default function Home() {
@@ -296,6 +336,7 @@ export default function Home() {
         {/* Games grid */}
         {!isLoading && games.length > 0 && (
           <>
+            <PicksOfTheDayBanner games={games} sport={sport} />
             <p className="text-xs text-gray-500 mb-4 font-medium">
               {games.length} game{games.length !== 1 ? 's' : ''} · {isTomorrow ? 'preview' : isPast ? 'final' : 'today'}
             </p>

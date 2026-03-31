@@ -40,10 +40,22 @@ service cloud.firestore {
     }
 
     // =========================================================
-    // /picks/{date} - AI generated picks for a given date
+    // /picks/{date}      - NBA AI generated picks
+    // /ncaa_picks/{date} - NCAAB AI generated picks
+    // /mlb_picks/{date}  - MLB AI generated picks
     // Public read, no client write (server only via Admin SDK)
     // =========================================================
     match /picks/{date} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /ncaa_picks/{date} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /mlb_picks/{date} {
       allow read: if true;
       allow write: if false;
     }

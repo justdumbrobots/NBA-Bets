@@ -66,7 +66,9 @@ async function analyzePick(game, sportLabel, apiKey) {
   if (!apiKey) throw new Error('CLAUDE_API_KEY not set')
 
   const prompt = buildPrompt(game, sportLabel)
-  const response = await axios.post(
+  let response
+  try {
+    response = await axios.post(
     CLAUDE_API_URL,
     {
       model: CLAUDE_MODEL,
@@ -80,12 +82,20 @@ async function analyzePick(game, sportLabel, apiKey) {
         'content-type': 'application/json',
       },
       timeout: 15000,
-    }
-  )
+    })
+  } catch (err) {
+    const status = err.response?.status
+    const detail = JSON.stringify(err.response?.data)
+    throw new Error(`Claude API error ${status}: ${detail || err.message}`)
+  }
 
   const text = response.data.content?.[0]?.text || ''
   const match = text.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('Claude returned no valid JSON')
+  if (!match) {
+    const { logger } = require('firebase-functions')
+    logger.warn('Claude raw response (no JSON found):', text)
+    throw new Error('Claude returned no valid JSON')
+  }
   return JSON.parse(match[0])
 }
 
